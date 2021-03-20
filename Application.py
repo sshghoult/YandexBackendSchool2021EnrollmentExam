@@ -5,5 +5,5 @@ import cfg
 
 
 app = web.Application()
-app.add_routes([web.post('/couriers', handlers.couriers)])
+app.add_routes([web.post('/couriers', handlers.post_couriers), web.post('/orders', handlers.post_orders)])
 web.run_app(app)
