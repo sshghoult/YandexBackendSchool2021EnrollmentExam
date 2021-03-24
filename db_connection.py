@@ -4,6 +4,7 @@ from aiomysql import DictCursor  # SELECT`s result will be presented in dicts
 import cfg  # configure file
 from typing import List, Tuple, Iterable, Dict  # type hints
 import logging
+import datetime
 import re
 
 
@@ -53,35 +54,81 @@ async def post_couriers_execute_queries(json_request) -> (bool, List[int]):
         return True, ok
 
 
-async def post_orders_assign_execute_queries(json_request) -> (bool, List[int]):
+async def post_orders_assign_execute_queries(json_request) -> (bool, Dict):
+    logging.debug('post_orders_assign_execute_queries: entered')
     conn = await aiomysql.connect(host='localhost', port=cfg.DB_PORT,
                                   user=cfg.DB_USER, password=cfg.DB_PASSWORD,
                                   db=cfg.DATABASE, cursorclass=DictCursor, autocommit=False)
     cur = await conn.cursor()
-    if await cur.execute('SELECT * FROM couriers WHERE courier_id = %s', (json_request['courier_id'],)):
+    await conn.begin()
 
-        orders_to_assign = await cur.execute('''
-        SELECT timedzeroed.order_id FROM
-            (SELECT orders.* FROM
-                (SELECT * FROM orders WHERE is_completed = 0) as orders
-                JOIN
-                    (SELECT dhof.order_id FROM
-                        (SELECT * FROM couriers_working_hours WHERE courier_id=%s) as cwh, delivery_hours_of_orders as dhof WHERE
-                    cwh.time_range_start <= dhof.time_range_start AND cwh.time_range_stop >= dhof.time_range_stop OR
-                    cwh.time_range_start <= dhof.time_range_start AND cwh.time_range_stop <= dhof.time_range_stop OR
-                    cwh.time_range_start >= dhof.time_range_start AND cwh.time_range_stop <= dhof.time_range_stop OR
-                    cwh.time_range_start >= dhof.time_range_start AND cwh.time_range_stop >= dhof.time_range_stop) as timed
-                ON orders.order_id = timed.order_id) AS timedzeroed,
-            (SELECT max_weight FROM weights WHERE courier_type = (SELECT courier_type FROM couriers WHERE courier_id = %s)) AS wght
-        WHERE timedzeroed.weight <= wght.max_weight AND timedzeroed.region IN (SELECT region FROM couriers_regions WHERE courier_id=%s)''')
-        # these orders are not completed yet, have weight <= max_weight of the courier, their region is among the regions of the courier,
-        # their delivery hours overlap couriers' working hours
+    await cur.execute('SELECT * FROM couriers WHERE courier_id = %s', (json_request['courier_id'],))
+    courier_data = await cur.fetchone()
+    if courier_data:
+        logging.debug(f'post_orders_assign_execute_queries: courier with id = {json_request["courier_id"]} found')
+        cur_assignment = courier_data['current_assignment_id']
+        if cur_assignment is None:
+            logging.debug('post_orders_assign_execute_queries: current assignment of the courier is None, looking up orders for the new one')
+            await cur.execute('''
+                    SELECT timedzeroed.order_id FROM
+                        (SELECT orders.* FROM
+                            (SELECT * FROM orders WHERE is_completed = 0 AND assigned_courier_id IS NULL) as orders
+                            JOIN
+                                (SELECT DISTINCT dhof.order_id FROM
+                                    (SELECT * FROM couriers_working_hours WHERE courier_id=%s) as cwh, delivery_hours_of_orders as dhof WHERE
+                                cwh.time_range_start <= dhof.time_range_start AND cwh.time_range_stop >= dhof.time_range_stop OR
+                                cwh.time_range_start <= dhof.time_range_start AND cwh.time_range_stop <= dhof.time_range_stop OR
+                                cwh.time_range_start >= dhof.time_range_start AND cwh.time_range_stop <= dhof.time_range_stop OR
+                                cwh.time_range_start >= dhof.time_range_start AND cwh.time_range_stop >= dhof.time_range_stop) as timed
+                            ON orders.order_id = timed.order_id) AS timedzeroed,
+                        (SELECT max_weight FROM weights WHERE courier_type = (SELECT courier_type FROM couriers WHERE courier_id = %s)) AS wght
+                    WHERE timedzeroed.weight <= wght.max_weight AND timedzeroed.region IN (SELECT region FROM couriers_regions WHERE courier_id=%s) FOR UPDATE''',
+                              (json_request['courier_id'], json_request['courier_id'], json_request['courier_id']))
+            # these orders are not completed yet, have weight <= max_weight of the courier, their region is among the regions of the courier,
+            # their delivery hours overlap couriers' working hours, they are not assigned yet
+            # TODO: organize this mess of a query
+            ids = await cur.fetchall()
 
-        # this query works extremely slow
+            if not ids:
+                logging.info(f"post_orders_assign_execute_queries: have found no appropriate orders for the courier "
+                             f"{json_request['courier_id']}, returning")
+                await conn.rollback()
+                return True, {'orders': []}
 
+            logging.debug('''post_orders_assign_execute_queries: selected orders, creating assignment''')
+            await cur.execute('''INSERT INTO assignments (assignment_id, assignment_timestamp) VALUES (DEFAULT, DEFAULT)''')
+            logging.debug('''post_orders_assign_execute_queries: updating courier current assignment''')
+            await cur.execute('''UPDATE couriers SET current_assignment_id = (SELECT assignment_id FROM assignments 
+            ORDER BY assignment_id DESC LIMIT 1) WHERE courier_id = %s''', (json_request['courier_id'], ))
+            logging.debug('''post_orders_assign_execute_queries: updating orders''')
+            await cur.executemany('''UPDATE orders SET assignment_id = (SELECT assignment_id FROM assignments 
+            ORDER BY assignment_id DESC LIMIT 1), assigned_courier_id = %s WHERE order_id = %s''',
+                                  tuple((json_request['courier_id'], x['order_id']) for x in ids))
+
+            await cur.execute('''SELECT assignment_timestamp FROM assignments 
+                        WHERE assignment_id = (SELECT current_assignment_id FROM couriers WHERE courier_id = %s)''',
+                              (json_request['courier_id'],))
+            assignment_time = await cur.fetchone()
+            assignment_time = assignment_time['assignment_timestamp']
+            logging.info('''post_orders_assign_execute_queries: created new assignment, returning''')
+            await conn.commit()
+            return True, {'orders': [{'id': x['order_id']} for x in ids], 'assign_time': str(assignment_time.isoformat())}
+
+        else:
+            await cur.execute('''SELECT order_id FROM orders WHERE assigned_courier_id = %s AND is_completed = 0''',
+                              (json_request['courier_id'], ))
+            ids = await cur.fetchall()
+            await cur.execute('''SELECT assignment_timestamp FROM assignments 
+            WHERE assignment_id = (SELECT current_assignment_id FROM couriers WHERE courier_id = %s)''', (json_request['courier_id'], ))
+            assignment_time = await cur.fetchone()
+            assignment_time = assignment_time['assignment_timestamp']
+            logging.info('''post_orders_assign_execute_queries: assignment is not finished yet, returning with remaining orders''')
+            await conn.commit()
+            return True, {'orders': [{'id': x['order_id']} for x in ids], 'assign_time': str(assignment_time.isoformat())}
     else:
-        logging.error(f'post_orders_assign_execute_queries: courier with id = {json_request["courier_id"]} not found')
-        return False, []
+        await conn.rollback()
+        logging.error(f'post_orders_assign_execute_queries: courier with id = {json_request["courier_id"]} not found, returning')
+        return False, {}
 
 
 async def post_orders_execute_queries(json_request) -> (bool, List[int]):
@@ -178,15 +225,15 @@ async def patch_couriers_id_execute_queries(courier_id: str, json_request: Dict)
     else:
         await conn.commit()
         logging.debug(msg='patch_couriers_id_execute_queries: patch is finished successfully, returning info')
-        await cur.execute('''SELECT * FROM couriers WHERE courier_id = %s''', (courier_id, ))
+        await cur.execute('''SELECT * FROM couriers WHERE courier_id = %s''', (courier_id,))
         id_type = await cur.fetchall()
-        await cur.execute('''SELECT region FROM couriers_regions WHERE courier_id = %s''', (courier_id, ))
+        await cur.execute('''SELECT region FROM couriers_regions WHERE courier_id = %s''', (courier_id,))
         regions = await cur.fetchall()
-        await cur.execute('''SELECT time_range_start, time_range_stop FROM couriers_working_hours WHERE courier_id = %s''', (courier_id, ))
+        await cur.execute('''SELECT time_range_start, time_range_stop FROM couriers_working_hours WHERE courier_id = %s''', (courier_id,))
         working_hours = await cur.fetchall()
         print(id_type, regions, working_hours, sep='\n')
         return True, {"courier_id": int(courier_id), "courier_type": id_type[0]['courier_type'], "regions": [x['region'] for x in regions],
-                      "working_hours": [str(z['time_range_start'])[:-3]+'-'+str(z['time_range_stop'])[:-3] for z in working_hours]}
+                      "working_hours": [str(z['time_range_start'])[:-3] + '-' + str(z['time_range_stop'])[:-3] for z in working_hours]}
 
 
 async def post_orders_complete_execute_queries(json_request):
@@ -198,7 +245,7 @@ async def post_orders_complete_execute_queries(json_request):
     try:
         await conn.begin()
         logging.debug(f'post_orders_complete_execute_queries: checking the order with id = {json_request["order_id"]}')
-        await cur.execute('''SELECT * FROM orders WHERE order_id = %s FOR UPDATE''', (json_request['courier_id'], ))
+        await cur.execute('''SELECT * FROM orders WHERE order_id = %s FOR UPDATE''', (json_request['courier_id'],))
         data = await cur.fetchone()
         logging.debug(f'post_orders_complete_execute_queries: data on order: {data}')
 

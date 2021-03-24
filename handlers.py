@@ -51,6 +51,11 @@ async def post_orders_assign(request: web.Request):
 
     all_valid, json_response = await db_connection.post_orders_assign_execute_queries(data)
 
+    if all_valid:
+        return web.json_response(json.dumps(json_response), status=200)
+    else:
+        raise web.HTTPBadRequest
+
 
 async def patch_couriers_id(request: web.Request):
     logging.debug('patch_couriers_id: entered')
