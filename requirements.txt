@@ -1,0 +1,2 @@
+aiohttp==latest
+aiomysql==latest
