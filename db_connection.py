@@ -152,20 +152,33 @@ async def patch_couriers_id_execute_queries(courier_id: str, json_request: Dict)
                                      VALUES (%s, STR_TO_DATE(%s, '%%H:%%i'), STR_TO_DATE(%s, '%%H:%%i'))''',
                                   tuple((courier_id, *i.split('-')) for i in json_request['working_hours']))
 
-            await cur.execute('''UPDATE orders, (SELECT dhof.order_id FROM
-                        (SELECT * FROM couriers_working_hours WHERE courier_id=%s) as cwh, delivery_hours_of_orders as dhof WHERE
-                    cwh.time_range_start <= dhof.time_range_start AND dhof.time_range_start <= cwh.time_range_stop AND
-                        cwh.time_range_stop <= dhof.time_range_stop OR
-                        cwh.time_range_start <= dhof.time_range_start AND dhof.time_range_start <= dhof.time_range_stop AND
-                        dhof.time_range_stop <= cwh.time_range_stop OR
-                        dhof.time_range_start <= cwh.time_range_start AND cwh.time_range_start <= dhof.time_range_stop AND
-                        dhof.time_range_stop <= cwh.time_range_stop OR
-                        dhof.time_range_start <= cwh.time_range_start AND cwh.time_range_start <= cwh.time_range_stop AND
-                        cwh.time_range_stop <= dhof.time_range_stop) as timed_ok
-                    SET orders.assigned_courier_id = NULL, orders.assignment_id = NULL WHERE orders.order_id NOT IN (timed_ok.order_id)
-                    AND orders.is_completed = 0 AND orders.assigned_courier_id = %s''',
-                              (courier_id, courier_id))
-            # the problem is in this query
+            await cur.execute('''UPDATE orders SET orders.assigned_courier_id = NULL, 
+            orders.assignment_id = NULL WHERE orders.assigned_courier_id = %s;''', (json_request['working_hours'], ))
+
+            await cur.execute('''SELECT timedzeroed.order_id FROM
+                            (SELECT orders.* FROM (SELECT * FROM orders WHERE is_completed = 0 AND assigned_courier_id IS NULL) as orders
+                            JOIN (SELECT DISTINCT dhof.order_id FROM (SELECT * FROM couriers_working_hours WHERE courier_id=%s) as cwh,
+                                delivery_hours_of_orders as dhof WHERE
+                                    cwh.time_range_start <= dhof.time_range_start AND dhof.time_range_start <= cwh.time_range_stop AND
+                                    cwh.time_range_stop <= dhof.time_range_stop OR
+                                    cwh.time_range_start <= dhof.time_range_start AND dhof.time_range_start <= dhof.time_range_stop AND
+                                    dhof.time_range_stop <= cwh.time_range_stop OR
+                                    dhof.time_range_start <= cwh.time_range_start AND cwh.time_range_start <= dhof.time_range_stop AND
+                                    dhof.time_range_stop <= cwh.time_range_stop OR
+                                    dhof.time_range_start <= cwh.time_range_start AND cwh.time_range_start <= cwh.time_range_stop AND
+                                    cwh.time_range_stop <= dhof.time_range_stop)
+                            as timed
+                            ON orders.order_id = timed.order_id) AS timedzeroed,
+                            (SELECT max_weight FROM weights WHERE courier_type = (SELECT courier_type FROM couriers WHERE courier_id = %s)) AS wght
+                            WHERE timedzeroed.weight <= wght.max_weight AND
+                                  timedzeroed.region IN (SELECT region FROM couriers_regions WHERE courier_id=%s) FOR UPDATE''',
+                              (courier_id, courier_id, courier_id))
+            ids = await cur.fetchall()
+
+            await cur.executemany('''UPDATE orders SET assignment_id = (SELECT current_assignment_id FROM couriers WHERE courier_id = %s), 
+            assigned_courier_id = %s WHERE order_id = %s''',
+                                  tuple((courier_id, courier_id, x['order_id']) for x in ids))
+            # TODO: it's rather ineffective, I should think about optimizing it
             logging.debug(msg='patch_couriers_id_execute_queries: finished to change working hours')
 
             await cur.execute("SELECT order_id, assignment_id FROM orders WHERE assignment_id ="
@@ -195,7 +208,7 @@ async def patch_couriers_id_execute_queries(courier_id: str, json_request: Dict)
         working_hours = await cur.fetchall()
         conn.close()
         return True, {"courier_id": int(courier_id), "courier_type": id_type[0]['courier_type'], "regions": [x['region'] for x in regions],
-                      "working_hours": [str(z['time_range_start'])[:-3] + '-' + str(z['time_range_stop'])[:-3] for z in working_hours]}
+                      "working_hours": [str(z['time_range_start'])[:-3] + '-' + str(z['time_range_stop'])[:-3]+'Z' for z in working_hours]}
 
 
 async def post_orders_execute_queries(json_request: Dict) -> (bool, List[int]):

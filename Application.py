@@ -3,13 +3,6 @@ import handlers
 import logging
 import cfg
 
-# TODO: create tests
-# TODO: create init function for DB
-# TODO: create init function for the app if one is needed
-# TODO: prepare app to be run from the cmd
-# TODO: create docker-build file for the app
-# TODO: create docker-compose file
-
 
 def run():
     app = web.Application()
