@@ -170,17 +170,14 @@ async def patch_couriers_id_execute_queries(courier_id: str, json_request: Dict)
 
             await cur.execute("SELECT order_id, assignment_id FROM orders WHERE assignment_id ="
                               " (SELECT current_assignment_id FROM couriers WHERE courier_id = %s) AND is_completed = 0",
-                              (json_request['courier_id'],))
+                              (courier_id,))
 
             data = await cur.fetchall()
             if not data:
-                logging.info(f'order {json_request["order_id"]} was the last one in the assignment '
-                             f'{data["assignment_id"]} of the courier {json_request["courier_id"]}, setting current assignment to NULL')
+                logging.info(f'patch de-assigned all remaining orders of courier {courier_id}, setting current_assignment_id to NULL')
                 # checking if assignment is empty after changes
                 await cur.execute("UPDATE couriers SET current_assignment_id = NULL WHERE courier_id = %s",
-                                  (json_request['courier_id'],))
-
-            # TODO: check why dot-overlaping in terms of time ranges orders are de-assigned
+                                  (courier_id,))
 
     except Exception as error:
         await conn.rollback()
