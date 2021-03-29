@@ -204,7 +204,7 @@ async def patch_couriers_id_execute_queries(courier_id: str, json_request: Dict)
         working_hours = await cur.fetchall()
         conn.close()
         return True, {"courier_id": int(courier_id), "courier_type": id_type[0]['courier_type'], "regions": [x['region'] for x in regions],
-                      "working_hours": [str(z['time_range_start'])[:-3] + '-' + str(z['time_range_stop'])[:-3]+'Z' for z in working_hours]}
+                      "working_hours": [str(z['time_range_start'])[:-3] + '-' + str(z['time_range_stop'])[:-3] for z in working_hours]}
 
 
 async def post_orders_execute_queries(json_request: Dict) -> (bool, List[int]):
@@ -351,7 +351,7 @@ async def post_orders_assign_execute_queries(json_request: Dict) -> (bool, Dict)
                 return True, {'orders': [{'id': x['order_id']} for x in ids], 'assign_time': str(assignment_time.isoformat())}
 
             else:
-                await cur.execute('''SELECT order_id FROM orders WHERE assignment_id = %s''',
+                await cur.execute('''SELECT order_id FROM orders WHERE assignment_id = %s AND is_completed = 0''',
                                   (cur_assignment,))
                 ids = await cur.fetchall()
                 await cur.execute('''SELECT assignment_timestamp FROM assignments 
@@ -410,7 +410,7 @@ async def post_orders_complete_execute_queries(json_request: Dict) -> (bool, Dic
                 await cur.execute("SELECT order_id, assignment_id FROM orders WHERE assignment_id ="
                                   " (SELECT current_assignment_id FROM couriers WHERE courier_id = %s) AND is_completed = 0",
                                   (json_request['courier_id'],))
-                data = await cur.fetchall()
+                data = await cur.fetchone()
                 if not data:
                     logging.info(f'order {json_request["order_id"]} was the last one in the assignment '
                                  f'{data["assignment_id"]} of the courier {json_request["courier_id"]}, setting current assignment to NULL')
@@ -436,6 +436,7 @@ async def post_orders_complete_execute_queries(json_request: Dict) -> (bool, Dic
             return False, {}
 
     except Exception as error:
+        await conn.rollback()
         logging.info(f'post_orders_complete_execute_queries: json_request={json_request}; error occurred: {error}')
         conn.close()
         return False, {}
