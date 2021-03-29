@@ -153,10 +153,14 @@ async def patch_couriers_id_execute_queries(courier_id: str, json_request: Dict)
 
             await cur.execute('''UPDATE orders, (SELECT dhof.order_id FROM
                         (SELECT * FROM couriers_working_hours WHERE courier_id=%s) as cwh, delivery_hours_of_orders as dhof WHERE
-                    cwh.time_range_start <= dhof.time_range_start AND cwh.time_range_stop >= dhof.time_range_stop OR
-                    cwh.time_range_start <= dhof.time_range_start AND cwh.time_range_stop <= dhof.time_range_stop OR
-                    cwh.time_range_start >= dhof.time_range_start AND cwh.time_range_stop <= dhof.time_range_stop OR
-                    cwh.time_range_start >= dhof.time_range_start AND cwh.time_range_stop >= dhof.time_range_stop) as timed_ok
+                    cwh.time_range_start <= dhof.time_range_start AND dhof.time_range_start <= cwh.time_range_stop AND
+                        cwh.time_range_stop <= dhof.time_range_stop OR
+                        cwh.time_range_start <= dhof.time_range_start AND dhof.time_range_start <= dhof.time_range_stop AND
+                        dhof.time_range_stop <= cwh.time_range_stop OR
+                        dhof.time_range_start <= cwh.time_range_start AND cwh.time_range_start <= dhof.time_range_stop AND
+                        dhof.time_range_stop <= cwh.time_range_stop OR
+                        dhof.time_range_start <= cwh.time_range_start AND cwh.time_range_start <= cwh.time_range_stop AND
+                        cwh.time_range_stop <= dhof.time_range_stop) as timed_ok
                     SET orders.assigned_courier_id = NULL, orders.assignment_id = NULL WHERE orders.order_id <> timed_ok.order_id
                     AND orders.is_completed = 0 AND orders.assigned_courier_id = %s''',
                               (courier_id, courier_id))
@@ -273,19 +277,23 @@ async def post_orders_assign_execute_queries(json_request: Dict) -> (bool, Dict)
             if cur_assignment is None:
                 logging.debug(f'post_orders_assign_execute_queries: json_request={json_request}; '
                               f'current assignment of the courier is None, looking up orders for the new one')
-                await cur.execute('''SELECT timedzeroed.order_id FROM 
-                (SELECT orders.* FROM (SELECT * FROM orders WHERE is_completed = 0 AND assigned_courier_id IS NULL) as orders 
-                JOIN (SELECT DISTINCT dhof.order_id FROM (SELECT * FROM couriers_working_hours WHERE courier_id=%s) as cwh, 
+                await cur.execute('''SELECT timedzeroed.order_id FROM
+                (SELECT orders.* FROM (SELECT * FROM orders WHERE is_completed = 0 AND assigned_courier_id IS NULL) as orders
+                JOIN (SELECT DISTINCT dhof.order_id FROM (SELECT * FROM couriers_working_hours WHERE courier_id=%s) as cwh,
                     delivery_hours_of_orders as dhof WHERE
-                        cwh.time_range_start <= dhof.time_range_start AND cwh.time_range_stop >= dhof.time_range_stop OR
-                        cwh.time_range_start <= dhof.time_range_start AND cwh.time_range_stop <= dhof.time_range_stop OR
-                        cwh.time_range_start >= dhof.time_range_start AND cwh.time_range_stop <= dhof.time_range_stop OR
-                        cwh.time_range_start >= dhof.time_range_start AND cwh.time_range_stop >= dhof.time_range_stop) 
+                        cwh.time_range_start <= dhof.time_range_start AND dhof.time_range_start <= cwh.time_range_stop AND
+                        cwh.time_range_stop <= dhof.time_range_stop OR
+                        cwh.time_range_start <= dhof.time_range_start AND dhof.time_range_start <= dhof.time_range_stop AND
+                        dhof.time_range_stop <= cwh.time_range_stop OR
+                        dhof.time_range_start <= cwh.time_range_start AND cwh.time_range_start <= dhof.time_range_stop AND
+                        dhof.time_range_stop <= cwh.time_range_stop OR
+                        dhof.time_range_start <= cwh.time_range_start AND cwh.time_range_start <= cwh.time_range_stop AND
+                        cwh.time_range_stop <= dhof.time_range_stop)
                 as timed
                 ON orders.order_id = timed.order_id) AS timedzeroed,
                 (SELECT max_weight FROM weights WHERE courier_type = (SELECT courier_type FROM couriers WHERE courier_id = %s)) AS wght
-                WHERE timedzeroed.weight <= wght.max_weight 
-                AND timedzeroed.region IN (SELECT region FROM couriers_regions WHERE courier_id=%s) FOR UPDATE''',
+                WHERE timedzeroed.weight <= wght.max_weight AND
+                      timedzeroed.region IN (SELECT region FROM couriers_regions WHERE courier_id=%s) FOR UPDATE''',
                                   (json_request['courier_id'], json_request['courier_id'], json_request['courier_id']))
 
                 # these orders are not completed yet, have weight <= max_weight of the courier,
