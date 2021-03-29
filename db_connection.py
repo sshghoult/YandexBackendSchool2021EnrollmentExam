@@ -154,9 +154,8 @@ async def patch_couriers_id_execute_queries(courier_id: str, json_request: Dict)
             logging.debug(f'patch_couriers_id_execute_queries: updated couriers_working_hours')
 
             await cur.execute('''UPDATE orders SET orders.assigned_courier_id = NULL,
-            orders.assignment_id = NULL WHERE orders.order_id NOT IN (SELECT timedzeroed.order_id FROM
-                (SELECT orders.* FROM (SELECT * FROM orders WHERE is_completed = 0 AND assigned_courier_id IS NULL) as orders
-                JOIN (SELECT DISTINCT dhof.order_id FROM (SELECT * FROM couriers_working_hours WHERE courier_id=%s) as cwh,
+            orders.assignment_id = NULL WHERE orders.order_id NOT IN
+                (SELECT DISTINCT dhof.order_id FROM (SELECT * FROM couriers_working_hours WHERE courier_id=%s) as cwh,
                     delivery_hours_of_orders as dhof WHERE
                         cwh.time_range_start <= dhof.time_range_start AND dhof.time_range_start <= cwh.time_range_stop AND
                         cwh.time_range_stop <= dhof.time_range_stop OR
@@ -165,14 +164,9 @@ async def patch_couriers_id_execute_queries(courier_id: str, json_request: Dict)
                         dhof.time_range_start <= cwh.time_range_start AND cwh.time_range_start <= dhof.time_range_stop AND
                         dhof.time_range_stop <= cwh.time_range_stop OR
                         dhof.time_range_start <= cwh.time_range_start AND cwh.time_range_start <= cwh.time_range_stop AND
-                        cwh.time_range_stop <= dhof.time_range_stop)
-                as timed
-                ON orders.order_id = timed.order_id) AS timedzeroed,
-                (SELECT max_weight FROM weights WHERE courier_type = (SELECT courier_type FROM couriers WHERE courier_id = %s)) AS wght
-                WHERE timedzeroed.weight <= wght.max_weight AND
-                      timedzeroed.region IN (SELECT region FROM couriers_regions WHERE courier_id=%s)) AND
+                        cwh.time_range_stop <= dhof.time_range_stop) AND
                 orders.assignment_id = (SELECT current_assignment_id FROM couriers WHERE courier_id = %s);''',
-                              (courier_id, courier_id, courier_id, courier_id))
+                              (courier_id, courier_id))
             logging.debug(f'patch_couriers_id_execute_queries: updated orders')
 
             ids = await cur.fetchall()
