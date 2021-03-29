@@ -413,7 +413,7 @@ async def post_orders_complete_execute_queries(json_request: Dict) -> (bool, Dic
                 data = await cur.fetchone()
                 if not data:
                     logging.info(f'order {json_request["order_id"]} was the last one in the assignment '
-                                 f'{data["assignment_id"]} of the courier {json_request["courier_id"]}, setting current assignment to NULL')
+                                 f' of the courier {json_request["courier_id"]}, setting current assignment to NULL')
                     # repeated completion of the task from the previous assignment won`t trigger this,
                     # because current assignment is retrieved here
                     await cur.execute("UPDATE couriers SET current_assignment_id = NULL WHERE courier_id = %s",
