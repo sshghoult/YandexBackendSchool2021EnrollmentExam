@@ -151,10 +151,12 @@ async def patch_couriers_id_execute_queries(courier_id: str, json_request: Dict)
             await cur.executemany('''INSERT INTO couriers_working_hours (courier_id, time_range_start, time_range_stop)
                                      VALUES (%s, STR_TO_DATE(%s, '%%H:%%i'), STR_TO_DATE(%s, '%%H:%%i'))''',
                                   tuple((courier_id, *i.split('-')) for i in json_request['working_hours']))
+            logging.debug(f'patch_couriers_id_execute_queries: updated couriers_working_hours')
 
             await cur.execute('''UPDATE orders SET orders.assigned_courier_id = NULL, 
-            orders.assignment_id = NULL WHERE orders.assigned_courier_id = %s;''', (json_request['working_hours'], ))
+            orders.assignment_id = NULL WHERE orders.assigned_courier_id = %s;''', (courier_id, ))
 
+            logging.debug(f'patch_couriers_id_execute_queries: set NULL orders')
             await cur.execute('''SELECT timedzeroed.order_id FROM
                             (SELECT orders.* FROM (SELECT * FROM orders WHERE is_completed = 0 AND assigned_courier_id IS NULL) as orders
                             JOIN (SELECT DISTINCT dhof.order_id FROM (SELECT * FROM couriers_working_hours WHERE courier_id=%s) as cwh,
@@ -173,6 +175,8 @@ async def patch_couriers_id_execute_queries(courier_id: str, json_request: Dict)
                             WHERE timedzeroed.weight <= wght.max_weight AND
                                   timedzeroed.region IN (SELECT region FROM couriers_regions WHERE courier_id=%s) FOR UPDATE''',
                               (courier_id, courier_id, courier_id))
+            logging.debug(f'patch_couriers_id_execute_queries: updated orders')
+
             ids = await cur.fetchall()
 
             await cur.executemany('''UPDATE orders SET assignment_id = (SELECT current_assignment_id FROM couriers WHERE courier_id = %s), 
