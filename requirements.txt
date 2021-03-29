@@ -1,2 +1,3 @@
-aiohttp==latest
-aiomysql==latest
+aiohttp==3.7.4.post0
+aiomysql==0.0.21
+cryptography==3.4.7

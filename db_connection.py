@@ -18,7 +18,7 @@ async def post_couriers_execute_queries(json_request: Dict) -> (bool, Dict):
     otherwise it`s a tuple of couriers' ids during the processing of which errors were encountered
     """
     logging.info(f'post_couriers_execute_queries: json_request={json_request} entered')
-    conn = await aiomysql.connect(host='localhost', port=cfg.DB_PORT,
+    conn = await aiomysql.connect(host=cfg.DB_HOST, port=cfg.DB_PORT,
                                   user=cfg.DB_USER, password=cfg.DB_PASSWORD,
                                   db=cfg.DATABASE, cursorclass=aiomysql.DictCursor, autocommit=False)
     # cursorclass=aiomysql.DictCursor: SELECT`s result will be presented in dicts
@@ -94,9 +94,11 @@ async def post_couriers_execute_queries(json_request: Dict) -> (bool, Dict):
 
     if validation_error:
         logging.info(f'post_couriers_execute_queries: json_request={json_request}; request has invalid data in it, returning')
+        conn.close()
         return False, validation_error
     else:
         logging.info(f'post_couriers_execute_queries: json_request={json_request}; request has been fulfilled successfully, returning')
+        conn.close()
         return True, ok
 
 
@@ -109,7 +111,7 @@ async def patch_couriers_id_execute_queries(courier_id: str, json_request: Dict)
     dict is a dict with all data on the updates courier
     """
     logging.info(msg='patch_couriers_id_execute_queries: entered')
-    conn = await aiomysql.connect(host='localhost', port=cfg.DB_PORT,
+    conn = await aiomysql.connect(host=cfg.DB_HOST, port=cfg.DB_PORT,
                                   user=cfg.DB_USER, password=cfg.DB_PASSWORD,
                                   db=cfg.DATABASE, cursorclass=aiomysql.DictCursor, autocommit=False)
     # cursorclass=aiomysql.DictCursor: SELECT`s result will be presented in dicts
@@ -162,6 +164,7 @@ async def patch_couriers_id_execute_queries(courier_id: str, json_request: Dict)
 
     except Exception as error:
         await conn.rollback()
+        conn.close()
         logging.info(msg=f'patch_couriers_id_execute_queries: an error occurred: {error}, rolled back')
         return False, {}
     else:
@@ -173,6 +176,7 @@ async def patch_couriers_id_execute_queries(courier_id: str, json_request: Dict)
         regions = await cur.fetchall()
         await cur.execute('''SELECT time_range_start, time_range_stop FROM couriers_working_hours WHERE courier_id = %s''', (courier_id,))
         working_hours = await cur.fetchall()
+        conn.close()
         return True, {"courier_id": int(courier_id), "courier_type": id_type[0]['courier_type'], "regions": [x['region'] for x in regions],
                       "working_hours": [str(z['time_range_start'])[:-3] + '-' + str(z['time_range_stop'])[:-3] for z in working_hours]}
 
@@ -186,7 +190,7 @@ async def post_orders_execute_queries(json_request: Dict) -> (bool, List[int]):
     otherwise it`s a tuple of orders' ids during the processing of which errors were encountered
     """
     logging.info(f'post_orders_execute_queries: json_request={json_request}; entered')
-    conn = await aiomysql.connect(host='localhost', port=cfg.DB_PORT,
+    conn = await aiomysql.connect(host=cfg.DB_HOST, port=cfg.DB_PORT,
                                   user=cfg.DB_USER, password=cfg.DB_PASSWORD,
                                   db=cfg.DATABASE, cursorclass=aiomysql.DictCursor, autocommit=False)
     cur = await conn.cursor()
@@ -235,9 +239,11 @@ async def post_orders_execute_queries(json_request: Dict) -> (bool, List[int]):
 
     if validation_error:
         logging.info(f'post_orders_execute_queries: json_request={json_request}; request has invalid data in it, returning')
+        conn.close()
         return False, validation_error
     else:
         logging.info(f'post_orders_execute_queries: json_request={json_request}; request has been fulfilled successfully, returning')
+        conn.close()
         return True, ok
 
 
@@ -249,7 +255,7 @@ async def post_orders_assign_execute_queries(json_request: Dict) -> (bool, Dict)
     dict is a ready-to-be-dumped info about assigned orders: {"orders": [{"id": int}], "assign_time": assignment_timestamp_str}
     """
     logging.info(f'post_orders_assign_execute_queries: json_request={json_request} entered')
-    conn = await aiomysql.connect(host='localhost', port=cfg.DB_PORT,
+    conn = await aiomysql.connect(host=cfg.DB_HOST, port=cfg.DB_PORT,
                                   user=cfg.DB_USER, password=cfg.DB_PASSWORD,
                                   db=cfg.DATABASE, cursorclass=aiomysql.DictCursor, autocommit=False)
     # cursorclass=aiomysql.DictCursor: SELECT`s result will be presented in dicts
@@ -291,6 +297,7 @@ async def post_orders_assign_execute_queries(json_request: Dict) -> (bool, Dict)
                     logging.info(f"post_orders_assign_execute_queries: json_request={json_request}; "
                                  f"have found no appropriate orders for the courier {json_request['courier_id']}, returning")
                     await conn.rollback()
+                    conn.close()
                     return True, {'orders': []}
 
                 logging.debug(f'''post_orders_assign_execute_queries: json_request={json_request}; selected orders, creating assignment''')
@@ -310,6 +317,7 @@ async def post_orders_assign_execute_queries(json_request: Dict) -> (bool, Dict)
                 assignment_time = assignment_time['assignment_timestamp']
                 logging.info(f'''post_orders_assign_execute_queries: json_request={json_request}; created new assignment, returning''')
                 await conn.commit()
+                conn.close()
                 return True, {'orders': [{'id': x['order_id']} for x in ids], 'assign_time': str(assignment_time.isoformat())}
 
             else:
@@ -323,15 +331,18 @@ async def post_orders_assign_execute_queries(json_request: Dict) -> (bool, Dict)
                 logging.info(f"post_orders_assign_execute_queries: json_request={json_request}; "
                              f"assignment is not finished yet, returning with remaining orders")
                 await conn.commit()
+                conn.close()
                 return True, {'orders': [{'id': x['order_id']} for x in ids], 'assign_time': str(assignment_time.isoformat())}
         else:
             logging.info(f'post_orders_assign_execute_queries: json_request={json_request}; '
                          f'courier with id = {json_request["courier_id"]} not found, returning')
             await conn.rollback()
+            conn.close()
             return False, {}
     except Exception as error:
         logging.info(f'post_orders_assign_execute_queries: json_request={json_request}; an exception occurred: {error}, returning')
         await conn.rollback()
+        conn.close()
         return False, {}
 
 
@@ -343,7 +354,7 @@ async def post_orders_complete_execute_queries(json_request: Dict) -> (bool, Dic
     dict contains an order id if bool is true and is empty otherwise
     """
     logging.debug(f'post_orders_complete_execute_queries: json_request={json_request}; entered')
-    conn = await aiomysql.connect(host='localhost', port=cfg.DB_PORT,
+    conn = await aiomysql.connect(host=cfg.DB_HOST, port=cfg.DB_PORT,
                                   user=cfg.DB_USER, password=cfg.DB_PASSWORD,
                                   db=cfg.DATABASE, cursorclass=aiomysql.DictCursor, autocommit=False)
     # cursorclass=aiomysql.DictCursor: SELECT`s result will be presented in dicts
@@ -380,24 +391,28 @@ async def post_orders_complete_execute_queries(json_request: Dict) -> (bool, Dic
                 await conn.commit()
 
                 logging.debug(f'post_orders_complete_execute_queries: json_request={json_request}; update is successful, returning')
+                conn.close()
                 return True, {'order_id': json_request['order_id']}
             else:
                 logging.info(f'post_orders_complete_execute_queries: json_request={json_request};'
                              f' courier id assigned for this order doesn\'t match id in request')
                 await conn.rollback()
+                conn.close()
                 return False, {}
         else:
             logging.info(f'post_orders_complete_execute_queries: json_request={json_request}; order not found')
             await conn.rollback()
+            conn.close()
             return False, {}
 
     except Exception as error:
         logging.info(f'post_orders_complete_execute_queries: json_request={json_request}; error occurred: {error}')
+        conn.close()
         return False, {}
 
 
 async def get_couriers_id_execute_queries(courier_id):
-    conn = await aiomysql.connect(host='localhost', port=cfg.DB_PORT,
+    conn = await aiomysql.connect(host=cfg.DB_HOST, port=cfg.DB_PORT,
                                   user=cfg.DB_USER, password=cfg.DB_PASSWORD,
                                   db=cfg.DATABASE, cursorclass=aiomysql.DictCursor, autocommit=False)
     cur = await conn.cursor()
@@ -411,10 +426,8 @@ async def get_couriers_id_execute_queries(courier_id):
         await cur.execute('''SELECT * FROM couriers_working_hours WHERE courier_id = %s''', (courier_id,))
         whs = await cur.fetchall()
     except aiomysql.Error:
+        conn.close()
         return False, []
     else:
+        conn.close()
         return True, [couriers, regs, [{i: str(x[i]) for i in x} for x in whs]]
-
-# TODO: add logging to every func
-
-# TODO: set appropriate levels of logging

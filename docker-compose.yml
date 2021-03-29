@@ -1,0 +1,43 @@
+version: "3"
+
+volumes:
+  mysql_volume:
+  app_logs_volume:
+
+networks:
+  testing_net:
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.28.0.0/16
+services:
+
+  mysql_server:
+    image: mysql/mysql-server:latest
+    restart: always
+    networks:
+      testing_net:
+        ipv4_address: 172.28.1.1
+    environment:
+      MYSQL_DATABASE: candy_delivery_app
+      MYSQL_USER: cda_python
+      MYSQL_PASSWORD: PLACEHOLDER2
+      MYSQL_ROOT_PASSWORD: PLACEHOLDER1
+    ports:
+      - '3306:3306'
+    volumes:
+      - mysql_volume:/data/mysql
+
+
+  candy_delivery_python_app:
+    build: .
+    depends_on:
+      - mysql_server
+    restart: always
+    ports:
+      - "8080:8080"
+    networks:
+      testing_net:
+        ipv4_address: 172.28.1.2
+
+
