@@ -125,7 +125,8 @@ async def patch_couriers_id_execute_queries(courier_id: str, json_request: Dict)
         if 'courier_type' in json_request:
             logging.debug(msg='patch_couriers_id_execute_queries: started to change courier_type')
             await cur.execute('''UPDATE orders SET orders.assigned_courier_id = NULL, orders.assignment_id = NULL 
-            WHERE weight > (SELECT max_weight FROM weights WHERE courier_type = %s) AND is_completed = 0 AND assigned_courier_id = %s''',
+            WHERE orders.weight > (SELECT max_weight FROM weights WHERE courier_type = %s) AND orders.is_completed = 0 
+            AND orders.assigned_courier_id = %s''',
                               (json_request['courier_type'], courier_id))
             await cur.execute('''UPDATE couriers SET courier_type = %s WHERE courier_id = %s''', (json_request['courier_type'], courier_id))
             logging.debug(msg='patch_couriers_id_execute_queries: finished to change courier_type')
@@ -161,10 +162,25 @@ async def patch_couriers_id_execute_queries(courier_id: str, json_request: Dict)
                         dhof.time_range_stop <= cwh.time_range_stop OR
                         dhof.time_range_start <= cwh.time_range_start AND cwh.time_range_start <= cwh.time_range_stop AND
                         cwh.time_range_stop <= dhof.time_range_stop) as timed_ok
-                    SET orders.assigned_courier_id = NULL, orders.assignment_id = NULL WHERE orders.order_id <> timed_ok.order_id
+                    SET orders.assigned_courier_id = NULL, orders.assignment_id = NULL WHERE orders.order_id NOT IN (timed_ok.order_id)
                     AND orders.is_completed = 0 AND orders.assigned_courier_id = %s''',
                               (courier_id, courier_id))
+            # the problem is in this query
             logging.debug(msg='patch_couriers_id_execute_queries: finished to change working hours')
+
+            await cur.execute("SELECT order_id, assignment_id FROM orders WHERE assignment_id ="
+                              " (SELECT current_assignment_id FROM couriers WHERE courier_id = %s) AND is_completed = 0",
+                              (json_request['courier_id'],))
+
+            data = await cur.fetchall()
+            if not data:
+                logging.info(f'order {json_request["order_id"]} was the last one in the assignment '
+                             f'{data["assignment_id"]} of the courier {json_request["courier_id"]}, setting current assignment to NULL')
+                # checking if assignment is empty after changes
+                await cur.execute("UPDATE couriers SET current_assignment_id = NULL WHERE courier_id = %s",
+                                  (json_request['courier_id'],))
+
+            # TODO: check why dot-overlaping in terms of time ranges orders are de-assigned
 
     except Exception as error:
         await conn.rollback()
